@@ -1,6 +1,7 @@
 # go-oae
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/mrknow-all/go-oae.svg)](https://pkg.go.dev/github.com/mrknow-all/go-oae)
+[![Build status](https://github.com/mrknow-all/go-oae/actions/workflows/go.yml/badge.svg)](https://github.com/mrknow-all/go-oae/actions/workflows/go.yml)
 
 go-oae implements online authenticated encryption as described in paper "Online Authenticated-Encryption and its Nonce-Reuse Misuse-Resistance"
 by Viet Tung Hoang, Reza Reyhanitabar, Phillip Rogaway, and Damian Vizár (https://eprint.iacr.org/2015/189) in Go.
