@@ -19,7 +19,7 @@ Install using `go get -u github.com/mrknow-all/go-oae`.
 
 This is the basic example which encrypts file into to another file.
 ```Go
-func EncryptFile(name string, encryptedName string, topSecretKey []byte) error {
+func EncryptFile(topSecretKey []byte) error {
     plaintext, err := os.Open("source.txt"))
     if err != nil {
         return err
