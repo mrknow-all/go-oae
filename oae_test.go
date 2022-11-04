@@ -39,20 +39,18 @@ func TestEncryptDecrypt(t *testing.T) {
 					_, err := rand.Read(plaintext)
 					require.NoError(t, err)
 
-					testEncryptDecrypt(t, plaintext, key, aad, options, 1)
-					testEncryptDecrypt(t, plaintext, key, aad, options, 2)
-					testEncryptDecrypt(t, plaintext, key, aad, options, segmentSize-1)
-					testEncryptDecrypt(t, plaintext, key, aad, options, segmentSize)
-					testEncryptDecrypt(t, plaintext, key, aad, options, segmentSize+1)
-					testEncryptDecrypt(t, plaintext, key, aad, options, plaintextSize-1)
-					testEncryptDecrypt(t, plaintext, key, aad, options, plaintextSize)
+					writesSizes := []int{1, 2, segmentSize - 1, segmentSize, segmentSize + 1, plaintextSize - 1, plaintextSize}
+					for _, writeSize := range writesSizes {
+						//testEncryptDecryptWriter(t, plaintext, key, aad, options, writeSize)
+						testEncryptDecryptReader(t, plaintext, key, aad, options, writeSize)
+					}
 				}
 			}
 		}
 	}
 }
 
-func testEncryptDecrypt(t *testing.T, plaintext []byte, key []byte, aad []byte, options EncryptOptions, writeSize int) {
+func testEncryptDecryptWriter(t *testing.T, plaintext []byte, key []byte, aad []byte, options EncryptOptions, writeSize int) {
 	if writeSize < 1 {
 		return
 	}
@@ -82,6 +80,32 @@ func testEncryptDecrypt(t *testing.T, plaintext []byte, key []byte, aad []byte, 
 	ciphertext := out.Bytes()
 	headerBytes := headerOut.Bytes()
 
+	testDecrypt(t, plaintext, key, aad, options, writeSize, ciphertext, err, headerBytes, header)
+}
+
+func testEncryptDecryptReader(t *testing.T, plaintext []byte, key []byte, aad []byte, options EncryptOptions, writeSize int) {
+	if writeSize < 1 {
+		return
+	}
+
+	in := bytes.NewReader(plaintext)
+	header, ew, err := NewEncryptingReader(in, key, aad, options)
+	require.NoError(t, err, "NewEncryptingReader with options %v", options)
+
+	var headerOut bytes.Buffer
+	err = header.MarshalTo(&headerOut)
+	require.NoError(t, err, "MarshalTo with header %+v", header)
+
+	var out bytes.Buffer
+	_, err = io.CopyBuffer(onlyWriter{w: &out}, ew, make([]byte, writeSize))
+	require.NoError(t, err, "EncryptingReader io.Copy with options %v, plaintext len %d", options, len(plaintext))
+	headerBytes := headerOut.Bytes()
+	ciphertext := out.Bytes()
+
+	testDecrypt(t, plaintext, key, aad, options, writeSize, ciphertext, err, headerBytes, header)
+}
+
+func testDecrypt(t *testing.T, plaintext []byte, key []byte, aad []byte, options EncryptOptions, writeSize int, ciphertext []byte, err error, headerBytes []byte, header CiphertextHeader) {
 	// Test that we correctly compute ciphertext and plaintext lengths.
 	require.EqualValues(t, len(ciphertext), options.Algorithm.CiphertextLength(options.SegmentSize, int64(len(plaintext))))
 	require.EqualValues(t, len(plaintext), options.Algorithm.PlaintextLength(options.SegmentSize, int64(len(ciphertext))))
@@ -292,7 +316,7 @@ func TestCountCalls(t *testing.T) {
 			n, err = dr.Read(buf[:segmentSize/2])
 			require.NoError(t, err, "DecryptingReadSeeker initial Read with header %+v", header)
 			require.Equal(t, segmentSize/2, n, "DecryptingReadSeeker initial Read with header %+v returned %d", header, n)
-			require.Equal(t, 1, r.reads, "num Read() after NewDecryptingReadSeeker")
+			require.Equal(t, 2, r.reads, "num Read() after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.startSeeks, "num Seek(io.SeekStart) after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.currentSeeks, "num Seek(io.SeekCurrent) after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.endSeeks, "num Seek(io.SeekEnd) after NewDecryptingReadSeeker")
@@ -303,7 +327,7 @@ func TestCountCalls(t *testing.T) {
 			n, err = dr.Read(buf[:segmentSize/4])
 			require.NoError(t, err, "DecryptingReadSeeker Read with header %+v", header)
 			require.Equal(t, segmentSize/4, n, "DecryptingReadSeeker initial Read with header %+v returned %d", header, n)
-			require.Equal(t, 1, r.reads, "num Read() after NewDecryptingReadSeeker")
+			require.Equal(t, 2, r.reads, "num Read() after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.startSeeks, "num Seek(io.SeekStart) after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.currentSeeks, "num Seek(io.SeekCurrent) after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.endSeeks, "num Seek(io.SeekEnd) after NewDecryptingReadSeeker")
@@ -313,7 +337,7 @@ func TestCountCalls(t *testing.T) {
 			n, err = dr.Read(buf[:segmentSize/8])
 			require.NoError(t, err, "DecryptingReadSeeker Read with header %+v", header)
 			require.Equal(t, segmentSize/8, n, "DecryptingReadSeeker initial Read with header %+v returned %d", header, n)
-			require.Equal(t, 2, r.reads, "num Read() after NewDecryptingReadSeeker")
+			require.Equal(t, 4, r.reads, "num Read() after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.startSeeks, "num Seek(io.SeekStart) after NewDecryptingReadSeeker")
 			require.Equal(t, 1, r.currentSeeks, "num Seek(io.SeekCurrent) after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.endSeeks, "num Seek(io.SeekEnd) after NewDecryptingReadSeeker")
@@ -330,7 +354,7 @@ func TestCountCalls(t *testing.T) {
 			o, err = dr.Seek(1, io.SeekCurrent)
 			require.NoError(t, err, "DecryptingReadSeeker Seek with header %+v", header)
 			require.EqualValues(t, 1, o, "DecryptingReadSeeker Seek with header %+v returned %d", header, n)
-			require.Equal(t, 1, r.reads, "num Read() after NewDecryptingReadSeeker")
+			require.Equal(t, 2, r.reads, "num Read() after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.startSeeks, "num Seek(io.SeekStart) after NewDecryptingReadSeeker")
 			require.Equal(t, 1, r.currentSeeks, "num Seek(io.SeekCurrent) after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.endSeeks, "num Seek(io.SeekEnd) after NewDecryptingReadSeeker")
@@ -338,7 +362,7 @@ func TestCountCalls(t *testing.T) {
 			n, err = dr.Read(buf[:segmentSize/4])
 			require.NoError(t, err, "DecryptingReadSeeker Read with header %+v", header)
 			require.Equal(t, segmentSize/4, n, "DecryptingReadSeeker initial Read with header %+v returned %d", header, n)
-			require.Equal(t, 1, r.reads, "num Read() after NewDecryptingReadSeeker")
+			require.Equal(t, 2, r.reads, "num Read() after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.startSeeks, "num Seek(io.SeekStart) after NewDecryptingReadSeeker")
 			require.Equal(t, 1, r.currentSeeks, "num Seek(io.SeekCurrent) after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.endSeeks, "num Seek(io.SeekEnd) after NewDecryptingReadSeeker")
@@ -355,7 +379,7 @@ func TestCountCalls(t *testing.T) {
 			o, err = dr.Seek(segmentSize, io.SeekCurrent)
 			require.NoError(t, err, "DecryptingReadSeeker Seek with header %+v", header)
 			require.EqualValues(t, segmentSize, o, "DecryptingReadSeeker Seek with header %+v returned %d", header, n)
-			require.Equal(t, 1, r.reads, "num Read() after NewDecryptingReadSeeker")
+			require.Equal(t, 2, r.reads, "num Read() after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.startSeeks, "num Seek(io.SeekStart) after NewDecryptingReadSeeker")
 			require.Equal(t, 1, r.currentSeeks, "num Seek(io.SeekCurrent) after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.endSeeks, "num Seek(io.SeekEnd) after NewDecryptingReadSeeker")
@@ -363,7 +387,7 @@ func TestCountCalls(t *testing.T) {
 			n, err = dr.Read(buf[:segmentSize/4])
 			require.NoError(t, err, "DecryptingReadSeeker Read with header %+v", header)
 			require.Equal(t, segmentSize/4, n, "DecryptingReadSeeker initial Read with header %+v returned %d", header, n)
-			require.Equal(t, 1, r.reads, "num Read() after NewDecryptingReadSeeker")
+			require.Equal(t, 2, r.reads, "num Read() after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.startSeeks, "num Seek(io.SeekStart) after NewDecryptingReadSeeker")
 			require.Equal(t, 1, r.currentSeeks, "num Seek(io.SeekCurrent) after NewDecryptingReadSeeker")
 			require.Equal(t, 0, r.endSeeks, "num Seek(io.SeekEnd) after NewDecryptingReadSeeker")
@@ -421,22 +445,87 @@ func TestWithHeader(t *testing.T) {
 		ciphertext := out.Bytes()
 		buf := make([]byte, plaintextSize+1)
 
-		er, err := NewDecryptingReaderWithHeader(bytes.NewReader(ciphertext), key, nil)
+		dr, err := NewDecryptingReaderWithHeader(bytes.NewReader(ciphertext), key, nil)
 		require.NoError(t, err)
-		n, err = er.Read(buf)
+		n, err = dr.Read(buf)
 		require.Equal(t, err, io.EOF)
 		require.Equal(t, plaintextSize, n)
 		require.Equal(t, plaintext, buf[:plaintextSize])
 
-		ers, err := NewDecryptingReadSeekerWithHeader(bytes.NewReader(ciphertext), key, nil)
+		drs, err := NewDecryptingReadSeekerWithHeader(bytes.NewReader(ciphertext), key, nil)
 		require.NoError(t, err)
 		const offset = 10000
-		o, err := ers.Seek(offset, io.SeekStart)
+		o, err := drs.Seek(offset, io.SeekStart)
 		require.NoError(t, err)
 		require.EqualValues(t, offset, o)
-		n, err = ers.Read(buf)
+		n, err = drs.Read(buf)
 		require.Equal(t, err, io.EOF)
 		require.Equal(t, plaintextSize-offset, n)
 		require.Equal(t, plaintext[offset:], buf[:plaintextSize-offset])
 	}
+
+	for _, algorithm := range testAlgorithms {
+		key := make([]byte, algorithm.KeySize())
+		_, err := rand.Read(key)
+		require.NoError(t, err)
+
+		const plaintextSize = 1000000
+		plaintext := make([]byte, plaintextSize)
+		_, err = rand.Read(plaintext)
+		require.NoError(t, err)
+
+		var out bytes.Buffer
+		er, err := NewEncryptingReaderWithHeader(bytes.NewReader(plaintext), key, nil, EncryptOptions{})
+		require.NoError(t, err)
+
+		_, err = io.Copy(&out, er)
+		require.NoError(t, err)
+
+		ciphertext := out.Bytes()
+		buf := make([]byte, plaintextSize+1)
+
+		dr, err := NewDecryptingReaderWithHeader(bytes.NewReader(ciphertext), key, nil)
+		require.NoError(t, err)
+		n, err := dr.Read(buf)
+		require.Equal(t, err, io.EOF)
+		require.Equal(t, plaintextSize, n)
+		require.Equal(t, plaintext, buf[:plaintextSize])
+	}
+
+	for _, algorithm := range testAlgorithms {
+		key := make([]byte, algorithm.KeySize())
+		_, err := rand.Read(key)
+		require.NoError(t, err)
+
+		const plaintextSize = 1000000
+		plaintext := make([]byte, plaintextSize)
+		_, err = rand.Read(plaintext)
+		require.NoError(t, err)
+
+		var out bytes.Buffer
+		er, err := NewEncryptingReaderWithHeader(bytes.NewReader(plaintext), key, nil, EncryptOptions{})
+		require.NoError(t, err)
+
+		_, err = io.CopyBuffer(onlyWriter{w: &out}, er, make([]byte, 2))
+		require.NoError(t, err)
+
+		ciphertext := out.Bytes()
+		buf := make([]byte, plaintextSize+1)
+
+		dr, err := NewDecryptingReaderWithHeader(bytes.NewReader(ciphertext), key, nil)
+		require.NoError(t, err)
+		n, err := dr.Read(buf)
+		require.Equal(t, err, io.EOF)
+		require.Equal(t, plaintextSize, n)
+		require.Equal(t, plaintext, buf[:plaintextSize])
+	}
+}
+
+// onlyWriter is used to remove ReadFrom implementation in bytes.Buffer so that io.CopyBuffer does not use it.
+type onlyWriter struct {
+	w *bytes.Buffer
+}
+
+func (o onlyWriter) Write(p []byte) (n int, err error) {
+	return o.w.Write(p)
 }

@@ -11,9 +11,6 @@ import (
 	"io"
 )
 
-// See readSegment for the description of overread. 8 should be smaller than tagSize for any algorithm.
-const overread = 8
-
 // DecryptingReadSeeker reads ciphertext and returns plaintext.
 type DecryptingReadSeeker struct {
 	// Wrapped reader.
@@ -22,13 +19,13 @@ type DecryptingReadSeeker struct {
 	aead             cipher.AEAD
 	nonce            []byte
 	tagSize          int
-	gotEof           bool
 	segmentIdx       int
-	segment          []byte
-	segmentLen       int
+	segment          segmentReader
 	offset           int
 	ciphertextOffset int64
 }
+
+var _ io.ReadSeeker = (*DecryptingReadSeeker)(nil)
 
 // DecryptingReader is a variant of DecryptingReadSeeker which supports ciphertext readers without Seek().
 type DecryptingReader struct {
@@ -37,6 +34,8 @@ type DecryptingReader struct {
 
 	inner DecryptingReadSeeker
 }
+
+var _ io.Reader = (*DecryptingReader)(nil)
 
 // NewDecryptingReadSeeker returns DecryptingReadSeeker that reads the ciphertext and returns the plaintext. Key and aad
 // must match the parameters to NewEncryptingWriter. Header must be the CiphertextHeader
@@ -81,10 +80,11 @@ func NewDecryptingReader(r io.Reader, key []byte, aad []byte, header CiphertextH
 func (d *DecryptingReadSeeker) Read(p []byte) (int, error) {
 	n := 0
 	for n < len(p) {
-		if d.segmentLen > 0 {
-			available := d.segmentLen - d.tagSize - d.offset
+		curSegment := d.segment.current(0)
+		if curSegment != nil {
+			available := len(curSegment) - d.tagSize - d.offset
 			l := len(p) - n
-			copy(p[n:], d.segment[d.offset:d.offset+available])
+			copy(p[n:], curSegment[d.offset:d.offset+available])
 			if available >= l {
 				n += l
 				d.offset += l
@@ -92,15 +92,11 @@ func (d *DecryptingReadSeeker) Read(p []byte) (int, error) {
 			}
 			n += available
 		}
-		if d.gotEof {
+		if d.segment.isLast() {
 			return n, io.EOF
 		}
 		d.segmentIdx++
-		// If the current segment is zero, we just started reading from the start.
-		usePrevSegment := d.segmentIdx != 0
-		err := d.readSegment(usePrevSegment)
-		d.offset = 0
-		if err != nil {
+		if err := d.readNextAndDecrypt(); err != nil {
 			return n, err
 		}
 	}
@@ -113,7 +109,7 @@ func (d *DecryptingReadSeeker) Read(p []byte) (int, error) {
 //
 // Seek will call Seek of the wrapped writer with SeekCurrent at most once.
 func (d *DecryptingReadSeeker) Seek(offset int64, whence int) (int64, error) {
-	segmentSize := int64(len(d.segment) - overread)
+	segmentSize := int64(d.segment.segmentSize())
 	segmentPlaintext := segmentSize - int64(d.tagSize)
 
 	var curPlaintextOffset int64
@@ -146,17 +142,16 @@ func (d *DecryptingReadSeeker) Seek(offset int64, whence int) (int64, error) {
 			d.resetSegment()
 			return 0, err
 		}
-		d.gotEof = false
+		d.segment.resetCurrent()
 		d.segmentIdx = int(nextSegmentIdx)
 		d.ciphertextOffset = nextSegmentIdx * segmentSize
-		if err := d.readSegment(false); err != nil {
-			// resetSegment has been called by readSegment already.
+		if err := d.readNextAndDecrypt(); err != nil {
 			return 0, err
 		}
 	}
 
 	d.offset = int(nextPlaintextOffset - nextSegmentIdx*segmentPlaintext)
-	if d.offset > d.segmentLen {
+	if d.offset > len(d.segment.current(0)) {
 		d.resetSegment()
 		return 0, io.EOF
 	}
@@ -180,8 +175,7 @@ func initDecryptingReadSeeker(result *DecryptingReadSeeker, key []byte, aad []by
 	result.tagSize = header.Algorithm.tagSize()
 	// -1 means "no segment loaded" and is also a good default because it will be incremented before first readSegment().
 	result.segmentIdx = -1
-	// See readSegment about overread
-	result.segment = make([]byte, header.SegmentSize+overread)
+	result.segment = newSegmentReader(header.SegmentSize)
 
 	keySize := header.Algorithm.KeySize()
 	if len(key) < keySize {
@@ -209,46 +203,18 @@ func initDecryptingReadSeeker(result *DecryptingReadSeeker, key []byte, aad []by
 	return nil
 }
 
-func (d *DecryptingReadSeeker) readSegment(usePrevSegment bool) error {
-	// We do not know the plaintext or ciphertext len and do not want to call Seek() to get it or ask the user to store
-	// it. We over-read the segment by a few bytes and check if we got an io.EOF. If we did not get io.EOF, it means
-	// there is at least one segment after the current segment.
-	if d.gotEof {
-		return errors.New("internal error: trying to read past EOF")
-	} else if usePrevSegment {
-		// The previous readSegment ended up either gotEof or read the full segment. The last bytes are the first bytes
-		// of the next segment.
-		copy(d.segment[:overread], d.segment[len(d.segment)-overread:])
-		n, err := io.ReadFull(d.R, d.segment[overread:])
-		d.ciphertextOffset += int64(n)
-		if err == nil {
-			d.gotEof = false
-			d.segmentLen = len(d.segment) - overread
-		} else if err == io.ErrUnexpectedEOF {
-			d.gotEof = true
-			d.segmentLen = n + overread
-		} else {
-			d.resetSegment()
-			return err
-		}
-	} else {
-		// We either started reading or just seeked to different segment.
-		n, err := io.ReadFull(d.R, d.segment)
-		d.ciphertextOffset += int64(n)
-		if err == nil {
-			d.gotEof = false
-			d.segmentLen = len(d.segment) - overread
-		} else if err == io.ErrUnexpectedEOF {
-			d.gotEof = true
-			d.segmentLen = n
-		} else {
-			d.resetSegment()
-			return err
-		}
+func (d *DecryptingReadSeeker) readNextAndDecrypt() error {
+	d.offset = 0
+	n, err := d.segment.readNext(d.R, 0)
+	if err != nil {
+		d.resetSegment()
+		return err
 	}
+	d.ciphertextOffset += int64(n)
 
-	appendToNonce(d.nonce, uint32(d.segmentIdx), d.gotEof)
-	_, err := d.aead.Open(d.segment[:0], d.nonce, d.segment[:d.segmentLen], nil)
+	appendToNonce(d.nonce, uint32(d.segmentIdx), d.segment.isLast())
+	curSegment := d.segment.current(0)
+	_, err = d.aead.Open(curSegment[:0], d.nonce, curSegment, nil)
 	if err != nil {
 		d.resetSegment()
 		return fmt.Errorf("incorrect ciphertext: %w", err)
@@ -259,9 +225,7 @@ func (d *DecryptingReadSeeker) readSegment(usePrevSegment bool) error {
 // resetSegment must be called upon any error when reading or seeking, otherwise the next Read() may return inconsistent
 // data, either stale contents or unencrypted ciphertext.
 func (d *DecryptingReadSeeker) resetSegment() {
-	// Set to true so that next Read() immediately returns without trying to readSegment().
-	d.gotEof = true
-	d.segmentLen = 0
+	d.segment.fail()
 	d.offset = 0
 }
 
