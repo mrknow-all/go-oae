@@ -42,66 +42,68 @@ func (a Algorithm) KeySize() int {
 //
 // NOTE: This function does not account for the length of CiphertextHeader which must be stored either alongside
 // the ciphertext or in the separate metadata storage.
-func (a Algorithm) CiphertextLength(segmentSize int, plaintextLength int64) int64 {
+func (a Algorithm) CiphertextLength(segmentSize int, plaintextLength int64) (int64, error) {
 	if segmentSize <= 0 {
-		panic("segmentSize must be positive")
+		return 0, errors.New("segmentSize must be positive")
 	}
 	if plaintextLength < 0 {
-		panic("plaintextLength must be non-negative")
+		return 0, errors.New("plaintextLength must be non-negative")
 	}
 
 	tagSize := int64(a.tagSize())
 	if plaintextLength == 0 {
 		// The empty plaintext must be authenticated.
-		return tagSize
+		return tagSize, nil
 	}
 
 	segmentPlaintext := int64(segmentSize) - tagSize
 	numSegments := (plaintextLength + segmentPlaintext - 1) / segmentPlaintext
-	return plaintextLength + numSegments*tagSize
+	return plaintextLength + numSegments*tagSize, nil
 }
 
 // PlaintextLength returns the length of the plaintext which will be read during decryption.
-func (a Algorithm) PlaintextLength(segmentSize int, ciphertextLength int64) int64 {
+func (a Algorithm) PlaintextLength(segmentSize int, ciphertextLength int64) (int64, error) {
 	if segmentSize <= 0 {
-		panic("segmentSize must be positive")
+		return 0, errors.New("segmentSize must be positive")
 	}
 	if ciphertextLength < 0 {
-		panic("plaintextLength must be positive")
+		return 0, errors.New("plaintextLength must be positive")
 	}
 	tagSize := int64(a.tagSize())
 	if ciphertextLength < tagSize {
-		// Do not panic here.
-		return 0
+		return 0, nil
 	}
 
 	numSegments := (ciphertextLength + int64(segmentSize) - 1) / int64(segmentSize)
-	return ciphertextLength - numSegments*tagSize
+	return ciphertextLength - numSegments*tagSize, nil
 }
 
 // CiphertextRange returns the range that must be read in order to decrypt the [plaintextStart:plaintextEnd] slice of
 // the plaintext (plaintextEnd is included in the range). plaintextTotal must be the total size of encrypted plaintext
-func (a Algorithm) CiphertextRange(segmentSize int, plaintextStart int64, plaintextEnd int64, plaintextTotal int64) (ciphertextStart int64, ciphertextEnd int64) {
+func (a Algorithm) CiphertextRange(segmentSize int, plaintextStart int64, plaintextEnd int64, plaintextTotal int64) (ciphertextStart int64, ciphertextEnd int64, err error) {
 	if segmentSize <= 0 {
-		panic("segmentSize must be positive")
+		return 0, 0, errors.New("segmentSize must be positive")
 	}
 	if plaintextStart < 0 {
-		panic("plaintextStart must be non-negative")
+		return 0, 0, errors.New("plaintextStart must be non-negative")
 	}
 	if plaintextEnd < 0 {
-		panic("plaintextEnd must be non-negative")
+		return 0, 0, errors.New("plaintextEnd must be non-negative")
 	}
 	if plaintextStart > plaintextEnd {
-		panic("plaintextStart must not be greater than plaintextEnd")
+		return 0, 0, errors.New("plaintextStart must not be greater than plaintextEnd")
 	}
 	if plaintextEnd >= plaintextTotal {
-		panic("plaintextEnd must be smaller than plaintextTotal")
+		return 0, 0, errors.New("plaintextEnd must be smaller than plaintextTotal")
 	}
 	if plaintextTotal < 0 {
-		panic("plaintextTotal must be non-negative")
+		return 0, 0, errors.New("plaintextTotal must be non-negative")
 	}
 
-	ciphertextTotal := a.CiphertextLength(segmentSize, plaintextTotal)
+	ciphertextTotal, err := a.CiphertextLength(segmentSize, plaintextTotal)
+	if err != nil {
+		return 0, 0, err
+	}
 	segmentLen := int64(segmentSize - a.tagSize())
 	startIdx := plaintextStart / segmentLen
 	ciphertextStart = startIdx * int64(segmentSize)

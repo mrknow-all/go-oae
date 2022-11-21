@@ -107,8 +107,12 @@ func testEncryptDecryptReader(t *testing.T, plaintext []byte, key []byte, aad []
 
 func testDecrypt(t *testing.T, plaintext []byte, key []byte, aad []byte, options EncryptOptions, writeSize int, ciphertext []byte, err error, headerBytes []byte, header CiphertextHeader) {
 	// Test that we correctly compute ciphertext and plaintext lengths.
-	require.EqualValues(t, len(ciphertext), options.Algorithm.CiphertextLength(options.SegmentSize, int64(len(plaintext))))
-	require.EqualValues(t, len(plaintext), options.Algorithm.PlaintextLength(options.SegmentSize, int64(len(ciphertext))))
+	clen, err := options.Algorithm.CiphertextLength(options.SegmentSize, int64(len(plaintext)))
+	require.NoError(t, err)
+	require.EqualValues(t, len(ciphertext), clen)
+	plen, err := options.Algorithm.PlaintextLength(options.SegmentSize, int64(len(ciphertext)))
+	require.NoError(t, err)
+	require.EqualValues(t, len(plaintext), plen)
 
 	var readHeader CiphertextHeader
 	err = readHeader.UnmarshalFrom(bytes.NewReader(headerBytes))
