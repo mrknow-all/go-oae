@@ -153,9 +153,8 @@ func appendToNonce(nonce []byte, segmentIdx uint32, isLast bool) {
 	nonce[l-4] = byte(segmentIdx >> 8)
 	nonce[l-3] = byte(segmentIdx >> 16)
 	nonce[l-2] = byte(segmentIdx >> 24)
+	nonce[l-1] = 0
 	if isLast {
 		nonce[l-1] = 1
-	} else {
-		nonce[l-1] = 0
 	}
 }
