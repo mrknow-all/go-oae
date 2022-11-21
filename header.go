@@ -33,29 +33,29 @@ type CiphertextHeader struct {
 func (c *CiphertextHeader) MarshalTo(w io.Writer) error {
 	magic := uint32(magicV1)
 	if err := binary.Write(w, binary.LittleEndian, &magic); err != nil {
-		return err
+		return fmt.Errorf("cannot write magic bytes: %w", err)
 	}
 	algorithm := uint32(c.Algorithm)
 	if err := binary.Write(w, binary.LittleEndian, &algorithm); err != nil {
-		return err
+		return fmt.Errorf("cannot write algorithm: %w", err)
 	}
 	segmentSize := uint32(c.SegmentSize)
 	if err := binary.Write(w, binary.LittleEndian, &segmentSize); err != nil {
-		return err
+		return fmt.Errorf("cannot write segment size: %w", err)
 	}
 	saltLen := uint32(len(c.Salt))
 	if err := binary.Write(w, binary.LittleEndian, &saltLen); err != nil {
-		return err
+		return fmt.Errorf("cannot write salt length: %w", err)
 	}
 	if _, err := w.Write(c.Salt); err != nil {
-		return err
+		return fmt.Errorf("cannot write salt: %w", err)
 	}
 	nonceLen := uint32(len(c.NoncePrefix))
 	if err := binary.Write(w, binary.LittleEndian, &nonceLen); err != nil {
-		return err
+		return fmt.Errorf("cannot write nonce prefix length: %w", err)
 	}
 	if _, err := w.Write(c.NoncePrefix); err != nil {
-		return err
+		return fmt.Errorf("cannot write nonce prefix: %w", err)
 	}
 	return nil
 }
@@ -69,39 +69,39 @@ func (c *CiphertextHeader) MarshalTo(w io.Writer) error {
 func (c *CiphertextHeader) UnmarshalFrom(r io.Reader) error {
 	var magic uint32
 	if err := binary.Read(r, binary.LittleEndian, &magic); err != nil {
-		return err
+		return fmt.Errorf("cannot read magic bytes: %w", err)
 	}
 	if magic != magicV1 {
 		return errors.New("not a header")
 	}
 	var algorithm uint32
 	if err := binary.Read(r, binary.LittleEndian, &algorithm); err != nil {
-		return err
+		return fmt.Errorf("cannot read algorithm: %w", err)
 	}
 	if algorithm >= uint32(numAlgorithms) {
-		return fmt.Errorf("unsupported algorithm %d", algorithm)
+		return fmt.Errorf("unsupported algorithm: %d", algorithm)
 	}
 	c.Algorithm = Algorithm(algorithm)
 	var segmentSize uint32
 	if err := binary.Read(r, binary.LittleEndian, &segmentSize); err != nil {
-		return err
+		return fmt.Errorf("cannot read segment size: %w", err)
 	}
 	// Segment size will be validated by NewDecryptingReader
 	c.SegmentSize = int(segmentSize)
 	var saltLen uint32
 	if err := binary.Read(r, binary.LittleEndian, &saltLen); err != nil {
-		return err
+		return fmt.Errorf("cannot read salt length: %w", err)
 	}
 	if saltLen != uint32(c.Algorithm.saltSize()) {
 		return fmt.Errorf("salt has incorrect size: %d vs %d", saltLen, c.Algorithm.saltSize())
 	}
 	c.Salt = make([]byte, int(saltLen))
 	if _, err := io.ReadFull(r, c.Salt); err != nil {
-		return err
+		return fmt.Errorf("cannot read salt: %w", err)
 	}
 	var noncePrefixLen uint32
 	if err := binary.Read(r, binary.LittleEndian, &noncePrefixLen); err != nil {
-		return err
+		return fmt.Errorf("cannot read nonce prefix length: %w", err)
 	}
 	// Nonce prefix len will be validated by NewDecryptingReader, this check ensures we do not allocate too much memory.
 	if noncePrefixLen >= uint32(c.Algorithm.nonceSize()) {
@@ -109,7 +109,7 @@ func (c *CiphertextHeader) UnmarshalFrom(r io.Reader) error {
 	}
 	c.NoncePrefix = make([]byte, int(noncePrefixLen))
 	if _, err := io.ReadFull(r, c.NoncePrefix); err != nil {
-		return err
+		return fmt.Errorf("cannot read nonce prefix: %w", err)
 	}
 	return nil
 }

@@ -7,8 +7,9 @@ import (
 	"crypto/cipher"
 	"errors"
 	"fmt"
-	"golang.org/x/crypto/hkdf"
 	"io"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 // DecryptingReadSeeker reads ciphertext and returns plaintext.
