@@ -182,7 +182,7 @@ func initDecryptingReadSeeker(result *DecryptingReadSeeker, key []byte, aad []by
 	if len(key) < keySize {
 		return fmt.Errorf("incorrect header: key must be at least %d bytes", keySize)
 	}
-	if len(header.Salt) != header.Algorithm.saltSize() {
+	if len(header.Salt) < header.Algorithm.saltSize() {
 		return fmt.Errorf("incorrect header: salt must be %d bytes", header.Algorithm.saltSize())
 	}
 	derivedKeyR := hkdf.New(header.Algorithm.hasher(), key, header.Salt, aad)

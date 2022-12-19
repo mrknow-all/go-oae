@@ -92,7 +92,7 @@ func (c *CiphertextHeader) UnmarshalFrom(r io.Reader) error {
 	if err := binary.Read(r, binary.LittleEndian, &saltLen); err != nil {
 		return fmt.Errorf("cannot read salt length: %w", err)
 	}
-	if saltLen != uint32(c.Algorithm.saltSize()) {
+	if saltLen < uint32(c.Algorithm.saltSize()) {
 		return fmt.Errorf("salt has incorrect size: %d vs %d", saltLen, c.Algorithm.saltSize())
 	}
 	c.Salt = make([]byte, int(saltLen))
