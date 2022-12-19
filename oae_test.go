@@ -41,7 +41,7 @@ func TestEncryptDecrypt(t *testing.T) {
 
 					writesSizes := []int{1, 2, segmentSize - 1, segmentSize, segmentSize + 1, plaintextSize - 1, plaintextSize}
 					for _, writeSize := range writesSizes {
-						//testEncryptDecryptWriter(t, plaintext, key, aad, options, writeSize)
+						testEncryptDecryptWriter(t, plaintext, key, aad, options, writeSize)
 						testEncryptDecryptReader(t, plaintext, key, aad, options, writeSize)
 					}
 				}
@@ -202,6 +202,17 @@ func testDecryptingSeeker(t *testing.T, dr io.ReadSeeker, header CiphertextHeade
 	require.EqualValues(t, 0, n, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly to start", header, len(plaintext))
 	require.NoError(t, err, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly to start", header, len(plaintext))
 
+	n, err = dr.Seek(int64(len(plaintext)), io.SeekStart)
+	require.EqualValues(t, len(plaintext), n, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly to end", header, len(plaintext))
+	require.NoError(t, err, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly to end", header, len(plaintext))
+
+	n, err = dr.Seek(0, io.SeekCurrent)
+	require.EqualValues(t, len(plaintext), n, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly to end", header, len(plaintext))
+	require.NoError(t, err, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly to end", header, len(plaintext))
+
+	_, err = dr.Seek(0, io.SeekStart)
+	require.NoError(t, err, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly to start", header, len(plaintext))
+
 	_, err = dr.Seek(-1, io.SeekStart)
 	require.Error(t, err, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly to start", header, len(plaintext))
 
@@ -216,17 +227,17 @@ func testDecryptingSeeker(t *testing.T, dr io.ReadSeeker, header CiphertextHeade
 		var off int
 		switch whence {
 		case io.SeekStart:
-			off = rand.Intn(len(plaintext))
+			off = rand.Intn(len(plaintext) + 1)
 			curOff = off
 		case io.SeekCurrent:
 			// Randomly switch to small offset to test intra-segment seeks.
 			switch rand.Intn(4) {
 			case 0:
-				off = rand.Intn(len(plaintext) - curOff)
+				off = rand.Intn(len(plaintext) + 1 - curOff)
 			case 1:
 				off = -rand.Intn(curOff + 1)
 			case 2:
-				if curOff < len(plaintext)-1 {
+				if curOff < len(plaintext) {
 					off = 1
 				} else if curOff > 0 {
 					off = -1
@@ -234,35 +245,37 @@ func testDecryptingSeeker(t *testing.T, dr io.ReadSeeker, header CiphertextHeade
 			case 3:
 				if curOff > 0 {
 					off = -1
-				} else if curOff < len(plaintext)-1 {
+				} else if curOff < len(plaintext) {
 					off = 1
 				}
 			}
 			curOff += off
 		}
-		require.True(t, curOff >= 0 && curOff < len(plaintext), "internal test error, incorrectly generated offset: %d not in [0, %d)", curOff, len(plaintext))
+		require.True(t, curOff >= 0 && curOff <= len(plaintext), "internal test error, incorrectly generated offset: %d not in [0, %d]", curOff, len(plaintext))
 
 		n, err := dr.Seek(int64(off), whence)
 		require.NoError(t, err, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly off %d, whence %d, curoff %d", header, len(plaintext), off, whence, curOff)
 		require.Equal(t, int64(curOff), n, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek correctly off %d, whence %d, curoff %d", header, len(plaintext), off, whence, curOff)
 
-		l := rand.Intn(len(plaintext) - curOff)
-		for o := 0; o < l; o += readSize {
-			to := o + readSize
-			if to > l {
-				to = l
+		if curOff < len(plaintext) {
+			l := rand.Intn(len(plaintext) - curOff)
+			for o := 0; o < l; o += readSize {
+				to := o + readSize
+				if to > l {
+					to = l
+				}
+				n, err := dr.Read(buf[o:to])
+				if err == io.EOF {
+					require.Equal(t, len(plaintext), to, "DecryptingReadSeeker Read with header %+v, plaintext len %d got premature EOF at offset %d + %d", header, len(plaintext), curOff, o)
+				} else {
+					require.NoError(t, err, "DecryptingReadSeeker Read with header %+v, plaintext len %d at offset %d + %d", header, len(plaintext), curOff, o)
+				}
+				require.Equal(t, to-o, n, "DecryptingReadSeeker Read with header %+v, plaintext len %d at offset %d + %d", header, len(plaintext), curOff, o)
 			}
-			n, err := dr.Read(buf[o:to])
-			if err == io.EOF {
-				require.Equal(t, len(plaintext), to, "DecryptingReadSeeker Read with header %+v, plaintext len %d got premature EOF at offset %d + %d", header, len(plaintext), curOff, o)
-			} else {
-				require.NoError(t, err, "DecryptingReadSeeker Read with header %+v, plaintext len %d at offset %d + %d", header, len(plaintext), curOff, o)
-			}
-			require.Equal(t, to-o, n, "DecryptingReadSeeker Read with header %+v, plaintext len %d at offset %d + %d", header, len(plaintext), curOff, o)
-		}
 
-		require.Equal(t, plaintext[curOff:curOff+l], buf[:l], "DecryptingReadSeeker with header %+v, plaintext len %d read different bytes at [%d:%d]", header, len(plaintext), off, off+l)
-		curOff += l
+			require.Equal(t, plaintext[curOff:curOff+l], buf[:l], "DecryptingReadSeeker with header %+v, plaintext len %d read different bytes at [%d:%d]", header, len(plaintext), off, off+l)
+			curOff += l
+		}
 	}
 }
 

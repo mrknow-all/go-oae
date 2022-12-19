@@ -105,8 +105,7 @@ func (d *DecryptingReadSeeker) Read(p []byte) (int, error) {
 }
 
 // Seek sets the offset in plaintext. Only SeekStart and SeekCurrent are supported, passing SeekEnd will result in
-// error. Setting offset to the end of plaintext or further will return an error (note that this differs from e.g. file
-// where setting offset to the end of file is ok).
+// error. Seeking past the end of plaintext will return an error.
 //
 // Seek will call Seek of the wrapped writer with SeekCurrent at most once.
 func (d *DecryptingReadSeeker) Seek(offset int64, whence int) (int64, error) {
@@ -130,6 +129,14 @@ func (d *DecryptingReadSeeker) Seek(offset int64, whence int) (int64, error) {
 	}
 	if nextPlaintextOffset < 0 {
 		return 0, errors.New("negative offset")
+	}
+
+	// We want to support seeking to the plaintext length (and immediately return io.EOF after that) and it is somewhat
+	// complicated unless we do the following hack: seek to the target minus one byte and then read one byte.
+	skipOne := false
+	if nextPlaintextOffset > 0 {
+		nextPlaintextOffset--
+		skipOne = true
 	}
 
 	nextSegmentIdx := nextPlaintextOffset / segmentPlaintext
@@ -156,6 +163,15 @@ func (d *DecryptingReadSeeker) Seek(offset int64, whence int) (int64, error) {
 		d.resetSegment()
 		return 0, io.EOF
 	}
+
+	if skipOne {
+		var skip [1]byte
+		if _, err := d.Read(skip[:]); err != nil {
+			return 0, err
+		}
+		nextPlaintextOffset++
+	}
+
 	return nextPlaintextOffset, nil
 }
 
