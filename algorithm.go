@@ -78,44 +78,62 @@ func (a Algorithm) PlaintextLength(segmentSize int, ciphertextLength int64) (int
 	return ciphertextLength - numSegments*tagSize, nil
 }
 
-// CiphertextRange returns the range that must be read in order to decrypt the [plaintextStart:plaintextEnd] slice of
-// the plaintext (plaintextEnd is included in the range). plaintextTotal must be the total size of encrypted plaintext
-func (a Algorithm) CiphertextRange(segmentSize int, plaintextStart int64, plaintextEnd int64, plaintextTotal int64) (ciphertextStart int64, ciphertextEnd int64, err error) {
+// Range is a half-open range of indices (the end is non-inclusive, i.e. [Begin, End))
+type Range struct {
+	Begin int64
+	End   int64
+}
+
+func (r Range) Validate() error {
+	if r.Begin < 0 {
+		return errors.New("start must be non-negative")
+	}
+	if r.End < 0 {
+		return errors.New("end must be non-negative")
+	}
+	if r.Begin > r.End {
+		return errors.New("start must not be greater than end")
+	}
+	return nil
+}
+
+// CiphertextRange returns the range that must be read in order to decrypt the plaintextRange slice of the plaintext.
+// plaintextTotal must be the total size of the encrypted plaintext.
+func (a Algorithm) CiphertextRange(segmentSize int, plaintextRange Range, plaintextTotal int64) (Range, error) {
 	if segmentSize <= 0 {
-		return 0, 0, errors.New("segmentSize must be positive")
-	}
-	if plaintextStart < 0 {
-		return 0, 0, errors.New("plaintextStart must be non-negative")
-	}
-	if plaintextEnd < 0 {
-		return 0, 0, errors.New("plaintextEnd must be non-negative")
-	}
-	if plaintextStart > plaintextEnd {
-		return 0, 0, errors.New("plaintextStart must not be greater than plaintextEnd")
-	}
-	if plaintextEnd >= plaintextTotal {
-		return 0, 0, errors.New("plaintextEnd must be smaller than plaintextTotal")
-	}
-	if plaintextTotal < 0 {
-		return 0, 0, errors.New("plaintextTotal must be non-negative")
+		return Range{}, errors.New("segmentSize must be positive")
 	}
 
+	if err := plaintextRange.Validate(); err != nil {
+		return Range{}, err
+	}
+	if plaintextRange.End > plaintextTotal {
+		return Range{}, errors.New("end must be smaller than plaintextTotal")
+	}
+	if plaintextTotal < 0 {
+		return Range{}, errors.New("plaintextTotal must be non-negative")
+	}
 	ciphertextTotal, err := a.CiphertextLength(segmentSize, plaintextTotal)
 	if err != nil {
-		return 0, 0, err
+		return Range{}, err
 	}
 	segmentLen := int64(segmentSize - a.tagSize())
-	startIdx := plaintextStart / segmentLen
-	ciphertextStart = startIdx * int64(segmentSize)
-	if ciphertextStart >= ciphertextTotal {
-		ciphertextStart = ciphertextTotal - 1
+	// See DecryptingReadSeeker.Seek() for details on off by one offset.
+	if plaintextRange.Begin > 0 {
+		plaintextRange.Begin--
 	}
-	endIdx := (plaintextEnd + segmentLen - 1) / segmentLen
-	ciphertextEnd = endIdx * int64(segmentSize)
-	if ciphertextEnd >= ciphertextTotal {
-		ciphertextEnd = ciphertextTotal - 1
+	startIdx := plaintextRange.Begin / segmentLen
+	ciphertextStart := startIdx * int64(segmentSize)
+	if ciphertextStart > ciphertextTotal {
+		ciphertextStart = ciphertextTotal
 	}
-	return
+	endIdx := (plaintextRange.End + segmentLen - 1) / segmentLen
+	// segmentReader reads the next segment.
+	ciphertextEnd := (endIdx + 1) * int64(segmentSize)
+	if ciphertextEnd > ciphertextTotal {
+		ciphertextEnd = ciphertextTotal
+	}
+	return Range{ciphertextStart, ciphertextEnd}, nil
 }
 
 func (a Algorithm) tagSize() int {

@@ -43,6 +43,7 @@ func TestEncryptDecrypt(t *testing.T) {
 					for _, writeSize := range writesSizes {
 						testEncryptDecryptWriter(t, plaintext, key, aad, options, writeSize)
 						testEncryptDecryptReader(t, plaintext, key, aad, options, writeSize)
+						testCiphertextRange(t, plaintext, key, aad, options, writeSize)
 					}
 				}
 			}
@@ -113,6 +114,10 @@ func testDecrypt(t *testing.T, plaintext []byte, key []byte, aad []byte, options
 	plen, err := options.Algorithm.PlaintextLength(options.SegmentSize, int64(len(ciphertext)))
 	require.NoError(t, err)
 	require.EqualValues(t, len(plaintext), plen)
+	crange, err := options.Algorithm.CiphertextRange(options.SegmentSize, Range{0, int64(len(plaintext))}, int64(len(plaintext)))
+	require.NoError(t, err)
+	require.EqualValues(t, 0, crange.Begin)
+	require.EqualValues(t, len(ciphertext), crange.End)
 
 	var readHeader CiphertextHeader
 	err = readHeader.UnmarshalFrom(bytes.NewReader(headerBytes))
@@ -291,6 +296,75 @@ func testSeekAfterNew(t *testing.T, dr io.ReadSeeker, header CiphertextHeader, p
 	require.NoError(t, err, "DecryptingReadSeeker Read with header %+v, plaintext len %d did not read after seek to %d", header, len(plaintext), seekFor)
 
 	require.Equal(t, plaintext[seekFor:], buf, "DecryptingReadSeeker Read with header %+v, plaintext len %d did not read correctly after seek to %d", header, len(plaintext), seekFor)
+}
+
+func testCiphertextRange(t *testing.T, plaintext []byte, key []byte, aad []byte, options EncryptOptions, size int) {
+	if size < 1 {
+		return
+	}
+
+	var out bytes.Buffer
+	header, ew, err := NewEncryptingWriter(&out, key, aad, options)
+	require.NoError(t, err, "NewEncryptingWriter with options %v", options)
+	_, err = ew.Write(plaintext)
+	require.NoError(t, err, "EncryptingWriter Write with options %v, plaintext len %d", options, len(plaintext))
+	err = ew.Close()
+	require.NoError(t, err, "EncryptingWriter Close with options %v, plaintext len %d", options, len(plaintext))
+	ciphertext := out.Bytes()
+
+	buf := make([]byte, size)
+	segmentLen := options.SegmentSize - options.Algorithm.tagSize()
+	offsets := []int{0, 1, segmentLen - 1, segmentLen, segmentLen + 1, len(plaintext) - 1, len(plaintext)}
+	for _, off := range offsets {
+		if off < 0 || off > len(plaintext) {
+			continue
+		}
+
+		r := &readStats{r: bytes.NewReader(ciphertext)}
+		er, err := NewDecryptingReadSeeker(r, key, aad, header)
+		require.NoError(t, err, "NewDecryptingReadSeeker with header %+v", header)
+		_, err = er.Seek(int64(off), io.SeekStart)
+		if err != io.EOF {
+			require.NoError(t, err, "DecryptingReadSeeker Seek with header %+v, plaintext len %d did not seek to %d", header, len(plaintext), off)
+		}
+		n, err := er.Read(buf)
+		if err == io.EOF {
+			continue
+		}
+		require.NoError(t, err, "DecryptingReadSeeker Read with header %+v, plaintext len %d did not read %d after seek to %d", header, len(plaintext), len(buf), off)
+		plaintextRange := Range{
+			Begin: int64(off),
+			End:   int64(off + size),
+		}
+		if plaintextRange.End > int64(len(plaintext)) {
+			plaintextRange.End = int64(len(plaintext))
+		}
+		expected := int(plaintextRange.End - plaintextRange.Begin)
+		require.EqualValues(t, expected, n, "DecryptingReadSeeker Read with header %+v, plaintext len %d did not read expected after seek to %d", header, len(plaintext), len(buf), off)
+
+		ciphertextRange, err := options.Algorithm.CiphertextRange(options.SegmentSize, plaintextRange, int64(len(plaintext)))
+		require.NoError(t, err, "CiphertextRange with segment size %d, plaintext range %+v and plaintext total %d", options.SegmentSize, plaintextRange, len(plaintext))
+		require.EqualValues(t, r.readFrom, ciphertextRange.Begin, "CiphertextRange with segment size %d, plaintext range %+v and plaintext total %d", options.SegmentSize, plaintextRange, len(plaintext))
+		require.EqualValues(t, r.readFrom+r.readLen, ciphertextRange.End, "CiphertextRange with segment size %d, plaintext range %+v and plaintext total %d", options.SegmentSize, plaintextRange, len(plaintext))
+	}
+}
+
+type readStats struct {
+	r io.ReadSeeker
+
+	readFrom int
+	readLen  int
+}
+
+func (r *readStats) Read(p []byte) (n int, err error) {
+	n, err = r.r.Read(p)
+	r.readLen += n
+	return n, err
+}
+
+func (r *readStats) Seek(offset int64, whence int) (int64, error) {
+	r.readFrom = int(offset)
+	return r.r.Seek(offset, whence)
 }
 
 // Test how many calls to Seek are made when doing a partial read.
