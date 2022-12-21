@@ -128,7 +128,11 @@ func (a Algorithm) CiphertextRange(segmentSize int, plaintextRange Range, plaint
 		ciphertextStart = ciphertextTotal
 	}
 	endIdx := (plaintextRange.End + segmentLen - 1) / segmentLen
-	// segmentReader reads the next segment.
+	if endIdx == startIdx {
+		// segmentReader will read at least two segments
+		endIdx++
+	}
+	// segmentReader reads the next segment
 	ciphertextEnd := (endIdx + 1) * int64(segmentSize)
 	if ciphertextEnd > ciphertextTotal {
 		ciphertextEnd = ciphertextTotal

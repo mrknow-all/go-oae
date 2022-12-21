@@ -45,6 +45,7 @@ func TestEncryptDecrypt(t *testing.T) {
 						testEncryptDecryptReader(t, plaintext, key, aad, options, writeSize)
 						testCiphertextRange(t, plaintext, key, aad, options, writeSize)
 					}
+					testCiphertextRange(t, plaintext, key, aad, options, 0)
 				}
 			}
 		}
@@ -299,10 +300,9 @@ func testSeekAfterNew(t *testing.T, dr io.ReadSeeker, header CiphertextHeader, p
 }
 
 func testCiphertextRange(t *testing.T, plaintext []byte, key []byte, aad []byte, options EncryptOptions, size int) {
-	if size < 1 {
+	if size < 0 {
 		return
 	}
-
 	var out bytes.Buffer
 	header, ew, err := NewEncryptingWriter(&out, key, aad, options)
 	require.NoError(t, err, "NewEncryptingWriter with options %v", options)
@@ -312,7 +312,10 @@ func testCiphertextRange(t *testing.T, plaintext []byte, key []byte, aad []byte,
 	require.NoError(t, err, "EncryptingWriter Close with options %v, plaintext len %d", options, len(plaintext))
 	ciphertext := out.Bytes()
 
-	buf := make([]byte, size)
+	var buf []byte
+	if size > 0 {
+		buf = make([]byte, size)
+	}
 	segmentLen := options.SegmentSize - options.Algorithm.tagSize()
 	offsets := []int{0, 1, segmentLen - 1, segmentLen, segmentLen + 1, len(plaintext) - 1, len(plaintext)}
 	for _, off := range offsets {
@@ -340,7 +343,7 @@ func testCiphertextRange(t *testing.T, plaintext []byte, key []byte, aad []byte,
 			plaintextRange.End = int64(len(plaintext))
 		}
 		expected := int(plaintextRange.End - plaintextRange.Begin)
-		require.EqualValues(t, expected, n, "DecryptingReadSeeker Read with header %+v, plaintext len %d did not read expected after seek to %d", header, len(plaintext), len(buf), off)
+		require.EqualValues(t, expected, n, "DecryptingReadSeeker Read with header %+v, plaintext len %d did not read expected after seek to %d", header, len(plaintext), off)
 
 		ciphertextRange, err := options.Algorithm.CiphertextRange(options.SegmentSize, plaintextRange, int64(len(plaintext)))
 		require.NoError(t, err, "CiphertextRange with segment size %d, plaintext range %+v and plaintext total %d", options.SegmentSize, plaintextRange, len(plaintext))
